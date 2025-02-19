@@ -120,7 +120,8 @@ https://aps.bctools.cn/， 无需账号，扫码即可登录查看
 │  │      │          └─aps
 │  │      │              ├─config    配置
 │  │      │              └─controller 接口 
-└─sql  数据库脚本```
+└─sql  数据库脚本
+```
 
 
 
