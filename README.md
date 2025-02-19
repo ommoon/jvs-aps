@@ -139,10 +139,10 @@ APS是连接企业资源计划（ERP）系统和制造执行系统（MES）的�
 企业邮筒（Web邮箱客户端）：http://mailbox.bctools.cn/  
 
 #### 技术社群
-技术交流群
+技术交流群  
 ![输入图片说明](pic/image.png)
 
-加我私聊
+加我私聊  
 ![输入图片说明](pic/image2.png)
 
 
