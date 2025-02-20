@@ -150,6 +150,8 @@ npm inatall
 npm run dev
 ```
 
+访问系统：  
+http://服务器ip:9998
 
 
 
