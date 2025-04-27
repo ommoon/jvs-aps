@@ -146,7 +146,7 @@ a、先启动后端服务
 启动后端服务文件：aps/jvs-aps-mgr/src/main/java/cn/bctools/aps/JvsApsApplication.java  
 b、前端启动命令  
 ```
-npm inatall
+npm install
 npm run dev
 ```
 
