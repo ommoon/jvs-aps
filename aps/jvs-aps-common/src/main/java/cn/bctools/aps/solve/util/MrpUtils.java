@@ -71,6 +71,7 @@ public class MrpUtils {
                     materialStack.push(childMaterial);
                 });
             }
+            // TODO omm 2025/8/14 库存足需要根据工艺路线去排产 以及对物料删减相应的数量更新
         }
         return mrpGraph;
     }
@@ -106,6 +107,7 @@ public class MrpUtils {
      * @return 物料信息
      */
     private static MaterialStack buildMaterialStack(String materialId, BigDecimal quantity, String parentId) {
+        // mrp物料需求
         MrpMaterial mrpMaterial = new MrpMaterial()
                 .setId(materialId)
                 .setQuantity(quantity);

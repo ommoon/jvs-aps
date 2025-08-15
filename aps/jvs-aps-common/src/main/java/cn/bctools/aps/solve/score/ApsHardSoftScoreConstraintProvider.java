@@ -101,7 +101,7 @@ public class ApsHardSoftScoreConstraintProvider implements ConstraintProvider {
     /**
      * 获取冲突分钟数
      *
-     * @param leftTask 左任务
+     * @param leftTask  左任务
      * @param rightTask 右任务
      * @return 冲突分钟数
      */

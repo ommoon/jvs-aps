@@ -20,6 +20,7 @@ public class BasicData {
     @Comment(value = "物料", notes = "Map<物料id, 物料信息>")
     private Map<String, Material> materialMap;
 
+    // 找所需要的
     @Comment(value = "工艺路线", notes = "Map<物料id, 工艺路线>")
     private Map<String, Graph<ProcessRouteNodePropertiesDTO>> processRouteMap;
 

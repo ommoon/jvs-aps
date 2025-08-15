@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "@antv/g6": "^5.0.39",
+    "@element-plus/icons-vue": "^2.3.2",
     "@types/node": "^22.7.5",
     "@visactor/vtable": "^1.15.0",
     "@visactor/vtable-gantt": "^1.15.0",
+    "@vueuse/core": "^13.6.0",
     "axios": "^1.7.7",
     "click-outside-vue3": "^4.0.1",
     "crypto-js": "^4.2.0",

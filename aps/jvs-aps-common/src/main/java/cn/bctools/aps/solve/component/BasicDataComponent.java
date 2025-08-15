@@ -47,9 +47,10 @@ public class BasicDataComponent {
 
 
     /**
-     * 获取基础数据
+     * 获取排产所需的基础数据
+     * 包括物料、工艺路线、工作日历、生产资源、BOM、来料订单和生产订单等信息
      *
-     * @return 基础数据
+     * @return 基础数据对象 BasicData
      */
     public BasicData getBasicData() {
         List<Material> materials = listMaterial();
@@ -68,7 +69,7 @@ public class BasicDataComponent {
     }
 
     /**
-     * 查询所有物料
+     * 查询所有物料信息，并转换为业务模型
      *
      * @return 物料集合
      */
@@ -111,9 +112,9 @@ public class BasicDataComponent {
     }
 
     /**
-     * 查询所有已启用的日历
+     * 查询所有已启用的日历，并转换为调度使用的日历结构
      *
-     * @return 日历集合
+     * @return Map<日历id, WorkCalendar>
      */
     private Map<String, WorkCalendar> getWorkCalendar() {
         // 日历
@@ -132,9 +133,9 @@ public class BasicDataComponent {
     }
 
     /**
-     * 查询所有资源
+     * 查询所有生产资源，并关联其使用的工作日历
      *
-     * @return 资源集合
+     * @return 生产资源集合 List<ProductionResource>
      */
     private List<ProductionResource> listProductionResources() {
         List<ProductionResourcePO> productionResources = productionResourceService.list();
@@ -155,9 +156,9 @@ public class BasicDataComponent {
     }
 
     /**
-     * 查询BOM
+     * 查询制造BOM信息，按物料ID分组
      *
-     * @return Map<物料id, 子件物料集合>
+     * @return Map<物料id, 子件物料集合List<BomMaterial>>
      */
     private Map<String, List<BomMaterial>> getBom() {
         List<ManufactureBomPO> manufactureBomList = manufactureBomService.list();
@@ -170,10 +171,10 @@ public class BasicDataComponent {
     }
 
     /**
-     * 查询状态为“在途”的来料订单
+     * 查询状态为“在途”的来料订单，并按物料ID分组
      *
      * @param materialCodeMap Map<物料编码, 物料id>
-     * @return Map<物料id, 来料订单集合>
+     * @return Map<物料id, 来料订单集合List<IncomingMaterialOrder>>
      */
     private Map<String, List<IncomingMaterialOrder>> getIncomingMaterialOrder(Map<String, String> materialCodeMap) {
         LambdaQueryWrapper<IncomingMaterialOrderPO> wrapper = Wrappers.<IncomingMaterialOrderPO>lambdaQuery()
@@ -193,7 +194,7 @@ public class BasicDataComponent {
     }
 
     /**
-     * 查询待未完结的生产订单
+     * 查询待未完结的生产订单（即需要排产的订单）
      *
      * @param materialCodeMap Map<物料编码, 物料id>
      * @return 生产订单集合
@@ -281,6 +282,3 @@ public class BasicDataComponent {
     }
 
 }
-
-
-
