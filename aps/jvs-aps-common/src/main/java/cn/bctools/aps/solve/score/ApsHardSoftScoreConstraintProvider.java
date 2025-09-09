@@ -110,9 +110,20 @@ public class ApsHardSoftScoreConstraintProvider implements ConstraintProvider {
         LocalDateTime leftEnd = leftTask.getEndTime();
         LocalDateTime rightStart = rightTask.getStartTime();
         LocalDateTime rightEnd = rightTask.getEndTime();
-        LocalDateTime start = leftStart.compareTo(rightStart) > 0 ? leftStart : rightStart;
-        LocalDateTime end = leftEnd.compareTo(rightEnd) < 0 ? leftEnd : rightEnd;
-        return (int) Duration.between(start, end).toMillis();
+
+        // 计算重叠的开始和结束时间
+        LocalDateTime start = leftStart.isAfter(rightStart) ? leftStart : rightStart;
+        LocalDateTime end = leftEnd.isBefore(rightEnd) ? leftEnd : rightEnd;
+
+        // 确保开始时间不晚于结束时间，否则没有重叠
+        if (start.isAfter(end)) {
+            return 0;
+        }
+
+        // 计算分钟数，确保非负
+        long minutes = Duration.between(start, end).toMinutes();
+        // 防止超过int范围
+        return (int) Math.min(minutes, Integer.MAX_VALUE);
     }
 
     public Constraint theEquipmentCanOnlyProcessOneProcessAtTheSameTime(ConstraintFactory factory) {

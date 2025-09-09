@@ -286,7 +286,8 @@ public class PlanSolutionFacadeServiceImpl implements PlanSolutionFacadeService 
     public boolean existsUnconfirmedTask() {
         long taskPendingCount = planTaskPendingService.count();
         long taskOrderPendingCount = planTaskOrderPendingService.count();
-        return taskPendingCount > 0 || taskOrderPendingCount >0;
+        // return taskPendingCount > 0 || taskOrderPendingCount >0;
+        return false;
     }
 
     @Override

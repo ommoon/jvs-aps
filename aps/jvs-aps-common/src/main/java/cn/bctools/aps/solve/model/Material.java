@@ -27,6 +27,9 @@ public class Material {
     @Comment("来源")
     private MaterialSourceEnum source;
 
+    /**
+     * 库存删减，删减单位运算
+     */
     @Comment("库存")
     private BigDecimal quantity;
 

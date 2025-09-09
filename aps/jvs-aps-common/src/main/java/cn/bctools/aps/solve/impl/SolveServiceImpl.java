@@ -110,7 +110,8 @@ public class SolveServiceImpl implements SolveService {
 
     @Override
     public boolean existsSolving() {
-        return redisUtils.exists(getPlanCacheKey());
+        String planCacheKey = getPlanCacheKey();
+        return redisUtils.exists(planCacheKey);
     }
 
     @Override
@@ -238,7 +239,37 @@ public class SolveServiceImpl implements SolveService {
 
     /**
      * 处理和分派生产订单
-     *
+     ···     * 开始
+     *   ↓
+     * 转换已锁定任务
+     *   ↓
+     * 初始化任务列表
+     *   ↓
+     * 获取并排序订单
+     *   ↓
+     * 遍历每个订单
+     *   ↓
+     * 执行MRP计算 ←───────────────┐
+     *   ↓                         │
+     * MRP结果为空？ ──是──→ 更新订单状态为无需排产
+     *   ↓ 否
+     * 生成制造任务
+     *   ↓
+     * 去重处理
+     *   ↓
+     * 设置任务优先级
+     *   ↓
+     * 添加到总任务列表
+     *   ↓
+     * 更新订单状态为已排产
+     *   ↓
+     * 更新排产进度
+     *   ↓
+     * 设置待排产任务
+     *   ↓
+     * 处理补充订单
+     *   ↓
+     * 结束
      * @param solution  规划解决方案
      * @param basicData 基础数据
      */
@@ -300,7 +331,7 @@ public class SolveServiceImpl implements SolveService {
                 .distinct()
                 .toList();
         if (ObjectNull.isNull(supplementOrders)) {
-           return;
+            return;
         }
         // 若补充订单的订单号已存在，则移除旧的订单，加入新的订单
         Set<String> supplementOrderCodes = supplementOrders.stream()

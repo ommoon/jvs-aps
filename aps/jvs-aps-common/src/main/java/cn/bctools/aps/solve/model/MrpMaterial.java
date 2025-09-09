@@ -20,4 +20,19 @@ public class MrpMaterial {
      * 需求数量
      */
     private BigDecimal quantity;
+
+    /**
+     * 原物料库存
+     */
+    private BigDecimal oriQuantity;
+
+    /**
+     * 来料订单库存
+     */
+    private BigDecimal inQuantity;
+
+    /**
+     * 来料订单库存订单id
+     */
+    private String inOrderId;
 }

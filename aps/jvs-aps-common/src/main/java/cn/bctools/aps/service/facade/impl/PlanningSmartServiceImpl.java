@@ -65,6 +65,7 @@ public class PlanningSmartServiceImpl implements PlanningSmartService {
             throw new BusinessException("排产计划正在生成中,请稍后再试");
         }
         try {
+            cancelPlanPending();
             if (solveService.existsSolving()) {
                 throw new BusinessException("排产计划正在生成中,请稍后再试");
             }

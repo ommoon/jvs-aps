@@ -15,12 +15,14 @@ import cn.bctools.aps.solve.util.DurationUtils;
 import cn.bctools.aps.solve.util.TaskCalendarUtils;
 import cn.bctools.common.exception.BusinessException;
 import cn.bctools.common.utils.ObjectNull;
+import com.alibaba.fastjson.JSONObject;
 import lombok.Data;
 import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
 import org.optaplanner.core.api.score.director.ScoreDirector;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -40,59 +42,108 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
 
     @Override
     public void updateTaskStartTime(ScoreDirector<SchedulingSolution> scoreDirector, MainProductionResource resource, int fromIndex) {
+        // 获取计划开始时间作为基准时间
         LocalDateTime beginTime = scoreDirector.getWorkingSolution().getPlanTime();
+        // 获取所有任务列表
         List<ProductionTask> allTasks = scoreDirector.getWorkingSolution().getTasks();
+        // 用于记录已处理的任务ID，避免重复处理
         Set<String> historyQueueJobIds = new HashSet<>();
+        // 待处理的任务队列
         Queue<PendingChangeTaskDTO> uncheckedSuccessorQueue = new ArrayDeque<>();
+        // 创建待处理任务对象
         PendingChangeTaskDTO pendingChangeTask = new PendingChangeTaskDTO()
                 .setResource(resource)
                 .setFromIndex(fromIndex);
+        // 将当前任务加入待处理队列
         uncheckedSuccessorQueue.add(pendingChangeTask);
+
+        // 循环处理队列中的所有任务
         while (!uncheckedSuccessorQueue.isEmpty()) {
+            // 取出队列中的一个待处理任务
             PendingChangeTaskDTO update = uncheckedSuccessorQueue.remove();
+            // 获取该资源的任务列表
             List<ProductionTask> tasks = update.getResource().getTaskList();
+            // 获取起始索引
             int fromIdx = update.getFromIndex();
+
+            // 如果任务列表为空或索引超出范围，则跳过
             if (ObjectNull.isNull(tasks) || tasks.size() - 1 < fromIdx) {
                 continue;
             }
-            // 获取当前变更的任务，在当前资源前一个任务的时间
+
+            // 获取当前变更任务在资源中的前一个任务
             ProductionTask sourcePreviousTask = getSourcePreviousTask(tasks, fromIdx);
-            LocalDateTime sourceTaskPreviousEndTime = fromIdx == 0 ? beginTime : Optional.ofNullable(sourcePreviousTask).map(ProductionTask::getEndTime).orElseGet(() -> beginTime);
+            // 计算前一个任务的结束时间，如果是第一个任务则使用计划开始时间
+            LocalDateTime sourceTaskPreviousEndTime = fromIdx == 0 ? beginTime :
+                    Optional.ofNullable(sourcePreviousTask).map(ProductionTask::getEndTime).orElseGet(() -> beginTime);
+            // 设置资源前一个任务的结束时间为基准时间
             LocalDateTime resourcePreviousEndTime = sourceTaskPreviousEndTime;
 
+            // 记录不需要更新的前置任务ID
             Set<String> notUpdateFrontTaskIds = new HashSet<>();
+
+            // 遍历从起始索引开始的所有任务
             for (int idx = fromIdx; idx < tasks.size(); idx++) {
                 ProductionTask t = tasks.get(idx);
 
+                // 将当前任务ID加入历史记录
                 historyQueueJobIds.add(t.getId());
+
+                // 如果任务已被锁定，则更新资源前一个任务的结束时间并继续
                 if (t.getPinned()) {
                     resourcePreviousEndTime = t.getEndTime();
                     continue;
                 }
-                // 改非前置任务的时间
+
+                // 获取当前资源中当前任务之前的所有任务
                 List<ProductionTask> currentResourcePreviousTasks = tasks.subList(0, idx);
-                LocalDateTime startTime = calculateStartTime(update.getResource(), t, sourcePreviousTask, resourcePreviousEndTime, allTasks, currentResourcePreviousTasks);
+                // 计算当前任务的开始时间
+                LocalDateTime startTime = calculateStartTime(
+                        update.getResource(),           // 资源
+                        t,                             // 当前任务
+                        sourcePreviousTask,            // 资源前一个任务
+                        resourcePreviousEndTime,       // 资源前一个任务结束时间
+                        allTasks,                      // 所有任务
+                        currentResourcePreviousTasks); // 当前资源中之前的任务
+
+                // 如果当前任务ID不在不需要更新的集合中
                 if (!notUpdateFrontTaskIds.contains(t.getId())) {
+                    // 通知OptaPlanner开始时间将要改变
                     scoreDirector.beforeVariableChanged(t, "startTime");
+                    // 设置任务开始时间
                     t.setStartTime(startTime);
+                    // 通知OptaPlanner开始时间已改变
                     scoreDirector.afterVariableChanged(t, "startTime");
+                    // 添加变更任务的前置任务ID到不需要更新集合
                     addChangedTaskIds(t, notUpdateFrontTaskIds);
+
+                    // 如果开始时间不为空，则更新资源前一个任务结束时间为当前任务结束时间
                     if (ObjectNull.isNotNull(startTime)) {
                         resourcePreviousEndTime = t.getEndTime();
                     }
+
+                    // 查找当前任务的后续任务并加入处理队列
                     scoreDirector.getWorkingSolution().getTasks()
                             .stream()
-                            .filter(j -> ObjectNull.isNull(j.getMergeTaskCode()))
-                            .filter(j -> j.getFrontTaskCodes() != null && j.getFrontTaskCodes().contains(t.getCode()))
-                            .filter(j -> j.getResource() != null)
+                            .filter(j -> ObjectNull.isNull(j.getMergeTaskCode())) // 过滤非合并任务
+                            .filter(j -> j.getFrontTaskCodes() != null && j.getFrontTaskCodes().contains(t.getCode())) // 过滤后续任务
+                            .filter(j -> j.getResource() != null) // 过滤已分配资源的任务
                             .forEach(nextJob -> {
+                                // 如果后续任务未被处理过
                                 if (!historyQueueJobIds.contains(nextJob.getId())) {
+                                    // 获取后续任务所在资源的任务列表
                                     List<ProductionTask> nextResourceTasks = nextJob.getResource().getTaskList();
-                                    int optionalIndex = IntStream.range(0, nextResourceTasks.size()).filter(i -> nextResourceTasks.get(i).getId().equals(nextJob.getId())).findFirst().getAsInt();
+                                    // 查找后续任务在资源中的索引
+                                    int optionalIndex = IntStream.range(0, nextResourceTasks.size())
+                                            .filter(i -> nextResourceTasks.get(i).getId().equals(nextJob.getId()))
+                                            .findFirst().getAsInt();
+                                    // 创建后续任务的待处理对象
                                     PendingChangeTaskDTO updateNextJob = new PendingChangeTaskDTO()
                                             .setResource(nextJob.getResource())
                                             .setFromIndex(optionalIndex);
+                                    // 将当前任务ID加入历史记录
                                     historyQueueJobIds.add(t.getId());
+                                    // 将后续任务加入待处理队列
                                     uncheckedSuccessorQueue.add(updateNextJob);
                                 }
                             });
@@ -100,6 +151,7 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
             }
         }
     }
+
 
     /**
      * 找到指定下标前面第一个有结束时间的任务
@@ -109,6 +161,15 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
      * @return 下标前第一个有结束时间的任务
      */
     private ProductionTask getSourcePreviousTask(List<ProductionTask> tasks, int fromIndex) {
+        List<LocalDateTime> endTime = tasks.stream().map(task -> task.getEndTime()).collect(Collectors.toList());
+        List<LocalDateTime> startTime = tasks.stream().map(task -> task.getStartTime()).collect(Collectors.toList());
+        List<String> getMainOrderId = tasks.stream().map(task -> task.getMainOrderId()).collect(Collectors.toList());
+        List<String> Material = tasks.stream().map(task -> task.getMaterial().getName()).collect(Collectors.toList());
+        List<BigDecimal> quantity = tasks.stream().map(task -> task.getQuantity()).collect(Collectors.toList());
+        List<LocalDateTime> getDeliveryTime = tasks.stream().map(task -> task.getOrder().getDeliveryTime()).collect(Collectors.toList());
+        List<String> orderCode = tasks.stream().map(task -> task.getOrder().getCode()).collect(Collectors.toList());
+        log.error("任务集合 orderCode={}, Material={}, quantity={}, getDeliveryTime={}, endTime={}, startTime={}, getMainOrderId={}"
+                ,orderCode, Material, quantity, getDeliveryTime, endTime, startTime, getMainOrderId);
         if (fromIndex == 0) {
             return null;
         }
@@ -157,7 +218,12 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
      * @param tasks                   所有排程任务
      * @return 任务开始时间
      */
-    private LocalDateTime calculateStartTime(MainProductionResource mainProductionResource, ProductionTask task, ProductionTask resourcePreviousTask, LocalDateTime resourcePreviousEndTime, List<ProductionTask> tasks, List<ProductionTask> currentResourcePreviousTasks) {
+    private LocalDateTime calculateStartTime(MainProductionResource mainProductionResource,
+                                             ProductionTask task,
+                                             ProductionTask resourcePreviousTask,
+                                             LocalDateTime resourcePreviousEndTime,
+                                             List<ProductionTask> tasks,
+                                             List<ProductionTask> currentResourcePreviousTasks) {
         Optional<ProcessUseMainResourcesDTO> processUseMainResources = task.getProcess().getUseMainResources()
                 .stream()
                 .filter(res -> res.getId().equals(mainProductionResource.getId()))
@@ -168,7 +234,12 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
 
 
         // 计算任务开始时间
-        LocalDateTime startTime = calculateStartTime(task, resourcePreviousTask, resourcePreviousEndTime, tasks, currentResourcePreviousTasks);
+        LocalDateTime startTime = calculateStartTime(
+                task,
+                resourcePreviousTask,
+                resourcePreviousEndTime,
+                tasks,
+                currentResourcePreviousTasks);
         if (ObjectNull.isNull(startTime)) {
             return startTime;
         }
@@ -190,7 +261,7 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
         }
 
         return startTime;
-     }
+    }
 
     @Override
     public LocalDateTime calculateStartTime(ProductionTask task, ProductionTask resourcePreviousTask, LocalDateTime resourcePreviousEndTime, List<ProductionTask> tasks, List<WorkCalendar> workCalendars, List<ProductionTask> currentResourcePreviousTasks) {
@@ -207,7 +278,11 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
      * @param tasks                   任务集合
      * @return 任务开始时间
      */
-    private LocalDateTime calculateStartTime(ProductionTask task, ProductionTask resourcePreviousTask, LocalDateTime resourcePreviousEndTime, List<ProductionTask> tasks, List<ProductionTask> currentResourcePreviousTasks) {
+    private LocalDateTime calculateStartTime(ProductionTask task,
+                                             ProductionTask resourcePreviousTask,
+                                             LocalDateTime resourcePreviousEndTime,
+                                             List<ProductionTask> tasks,
+                                             List<ProductionTask> currentResourcePreviousTasks) {
         // ES关系
         if (task.getStartTask() || ProcessRelationshipEnum.ES.equals(task.getProcess().getProcessRelationship())) {
             return calculateStartTimeEs(task, resourcePreviousTask, resourcePreviousEndTime, tasks, currentResourcePreviousTasks);
@@ -229,7 +304,11 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
      * @param tasks 所有排程任务
      * @return 当前任务开始时间
      */
-    private LocalDateTime calculateStartTimeEs(ProductionTask task, ProductionTask resourcePreviousTask, LocalDateTime previousEndTime, List<ProductionTask> tasks, List<ProductionTask> currentResourcePreviousTasks) {
+    private LocalDateTime calculateStartTimeEs(ProductionTask task,
+                                               ProductionTask resourcePreviousTask,
+                                               LocalDateTime previousEndTime,
+                                               List<ProductionTask> tasks,
+                                               List<ProductionTask> currentResourcePreviousTasks) {
         // 获取执行当前任务之前的结束时间最晚的任务
         PreTask preTask = getPreTask(task, resourcePreviousTask, previousEndTime, tasks);
 
@@ -289,7 +368,10 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
      * @param tasks 所有排程任务
      * @return 当前任务开始时间
      */
-    private PreTask getPreTask(ProductionTask task, ProductionTask resourcePreviousTask, LocalDateTime previousEndTime, List<ProductionTask> tasks) {
+    private PreTask getPreTask(ProductionTask task,
+                               ProductionTask resourcePreviousTask,
+                               LocalDateTime previousEndTime,
+                               List<ProductionTask> tasks) {
         // 当前任务最早开始时间
         LocalDateTime earliestStartTime = null;
         // 任务最早开始时间所属前工序任务

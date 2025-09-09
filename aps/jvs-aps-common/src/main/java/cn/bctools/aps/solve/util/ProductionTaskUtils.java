@@ -12,6 +12,8 @@ import cn.bctools.aps.util.PlanUtils;
 import cn.bctools.common.utils.ObjectNull;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import lombok.Data;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -25,6 +27,8 @@ import java.util.stream.Collectors;
  * 生产任务工具
  */
 public class ProductionTaskUtils {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductionTaskUtils.class);
 
     private ProductionTaskUtils() {
     }
@@ -59,37 +63,47 @@ public class ProductionTaskUtils {
      * @return 生产制造订单商品的制造任务集合
      */
     private static List<ProductionTask> generateTask(ProductionOrder order, BasicData basicData, Graph<MrpMaterial> mrpMaterialGraph) {
-        // 物料生产任务
-        List<ProductionTask> tasks = new ArrayList<>();
-        Map<String, MrpMaterialTask> mrpMaterialTaskMap = new HashMap<>();
-        Map<String, Material> materialMap = basicData.getMaterialMap();
-        Map<String, Graph<ProcessRouteNodePropertiesDTO>> processRouteMap = basicData.getProcessRouteMap();
-        // 计算所有欠料物料延迟时间
+        // 1. 初始化任务列表和相关数据结构
+        List<ProductionTask> tasks = new ArrayList<>();  // 存储所有生成的任务
+        Map<String, MrpMaterialTask> mrpMaterialTaskMap = new HashMap<>();  // 存储物料与其任务的映射关系
+        Map<String, Material> materialMap = basicData.getMaterialMap();  // 物料信息映射
+        Map<String, Graph<ProcessRouteNodePropertiesDTO>> processRouteMap = basicData.getProcessRouteMap();  // 工艺路线映射
+
+        // 2. 计算所有采购类物料的延迟时间（提前期+缓冲期）
+        // 这些延迟时间将被设置到顶层任务上，用于考虑采购物料的到货时间
         Map<String, Duration> materialDelayMap = getMaterialDelayMap(mrpMaterialGraph, materialMap);
 
-        // 物料生产计划函数
+        // 3. 定义物料任务生成函数
+        // 对于每个物料节点，生成相应的生产任务
         Function<Topological, List<ProductionTask>> materialTaskFunction = topological -> {
             String materialNodeId = topological.getNodeId();
-            // 生成任务
+            // 3.1 获取物料信息
             MrpMaterial mrpMaterial = mrpMaterialGraph.getNode(materialNodeId).getData();
             String materialId = mrpMaterial.getId();
             Material material = materialMap.get(materialId);
             Graph<ProcessRouteNodePropertiesDTO> processRoute = processRouteMap.get(materialId);
             MrpMaterialTask mrpMaterialTask = new MrpMaterialTask();
-            // 制造类物料，生成对应的生产任务
+
+            // 3.2 只处理制造类物料（非采购类）
             List<ProductionTask> taskList = null;
             if (MaterialSourceEnum.PRODUCED.equals(material.getSource())) {
+                // 3.2.1 如果不是主订单物料，则创建子订单
                 ProductionOrder childOrder = null;
                 if (!order.getMaterialId().equals(materialId)) {
+                    // 获取上游物料链编码，用于生成子订单编码
                     String materialChainFromCode = getUpstreamMaterialChainFromCode(materialNodeId, mrpMaterialGraph, materialMap);
                     childOrder = createChildOrder(order, materialChainFromCode, material, mrpMaterial.getQuantity());
                 }
+
+                // 3.2.2 根据工艺路线创建生产任务
                 taskList = createTaskFromProcessRoute(order, childOrder, material, mrpMaterial.getQuantity(), processRoute);
                 if (ObjectNull.isNull(taskList)) {
                     return null;
                 }
                 mrpMaterialTask.setTaskList(taskList);
-                // 获取前置物料任务的最后一道任务
+
+                // 3.2.3 建立物料间的任务依赖关系
+                // 获取前置物料任务的最后一道任务，作为当前任务的前置任务
                 Set<String> fromIds = mrpMaterialGraph.getNodeFromIds(materialNodeId);
                 if (ObjectNull.isNotNull(fromIds)) {
                     List<ProductionTask> notHaveFrontTaskList = mrpMaterialTask.getNotHaveFrontTasks();
@@ -105,22 +119,31 @@ public class ProductionTaskUtils {
                     });
                 }
                 mrpMaterialTaskMap.put(materialNodeId, mrpMaterialTask);
+            } else {
+                materialNodeId = topological.getNodeId();
+                // 3.1 获取物料信息
+                mrpMaterial = mrpMaterialGraph.getNode(materialNodeId).getData();
+                log.info("非制造类物料：{}, {}, {}", materialId,  material, mrpMaterial);
             }
             return taskList;
         };
 
-        // 物料任务结果处理函数
+        // 4. 定义任务结果处理函数
         Consumer<List<List<ProductionTask>>> consumer = materialTasks -> materialTasks.stream()
                 .filter(ObjectNull::isNotNull)
                 .forEach(tasks::addAll);
-        // 按顺序获取物料生产任务
+
+        // 5. 按照物料依赖关系的拓扑排序生成任务
+        // 这确保了先生成底层物料的任务，再生成上层物料的任务
         GraphUtils.topologicalSort(mrpMaterialGraph, materialTaskFunction, consumer);
 
+        // 6. 为起始任务设置物料延迟时间
         tasks.forEach(task -> {
             if (task.getStartTask() && ObjectNull.isNull(task.getFrontTaskCodes())) {
                 task.setMaterialDelayMap(materialDelayMap);
             }
         });
+
         return tasks;
     }
 
@@ -135,14 +158,20 @@ public class ProductionTaskUtils {
         return mrpMaterialGraph.getNodes().stream()
                 .map(node -> {
                     MrpMaterial mrpMaterial = mrpMaterialGraph.getNode(node.getId()).getData();
+                    // TODO omm 2025/9/8 是否一致
+                    MrpMaterial data = node.getData();
                     String materialId = mrpMaterial.getId();
                     return materialMap.get(materialId);
                 })
+                // TODO omm 2025/9/8 采购的延迟时间
                 .filter(material -> MaterialSourceEnum.PURCHASED.equals(material.getSource()))
                 .collect(Collectors.toMap(Material::getId, material -> {
                     Duration leadTimeDuration = material.getLeadTimeDuration();
                     Duration bufferTimeDuration = material.getBufferTimeDuration();
                     return leadTimeDuration.plus(bufferTimeDuration);
+                }, (existing, replacement) -> {
+                    // 选择较大的延迟时间 // 处理重复键：选择较大值
+                    return existing.compareTo(replacement) > 0 ? existing : replacement;
                 }));
     }
 
@@ -176,21 +205,21 @@ public class ProductionTaskUtils {
      * 根据工艺路线创建生产任务
      *
      * @param mainOrder         主订单
-     * @param order             订单
+     * @param childOrder        订单
      * @param material          主产物
      * @param quantity          生产数量
      * @param processRouteGraph 工艺路线
      * @return 生产任务
      */
     private static List<ProductionTask> createTaskFromProcessRoute(ProductionOrder mainOrder,
-                                                                   ProductionOrder order,
+                                                                   ProductionOrder childOrder,
                                                                    Material material,
                                                                    BigDecimal quantity,
                                                                    Graph<ProcessRouteNodePropertiesDTO> processRouteGraph) {
         if (GraphUtils.isEmpty(processRouteGraph)) {
             return Collections.emptyList();
         }
-        ProductionOrder taskOrder = Optional.ofNullable(order).orElse(mainOrder);
+        ProductionOrder taskOrder = Optional.ofNullable(childOrder).orElse(mainOrder);
         // 获取最终的工序节点id
         String endProcessNodeId = GraphUtils.getNoOutDegreeNodeIds(processRouteGraph).get(0);
         // Map<工序节点id, 工序生产任务>
@@ -207,7 +236,7 @@ public class ProductionTaskUtils {
                                 .setQuantity(quantity)
                                 .setPinned(false)
                                 .setEndTask(node.getId().equals(endProcessNodeId))
-                                .setSupplement(ObjectNull.isNotNull(order))
+                                .setSupplement(ObjectNull.isNotNull(childOrder))
                                 .setInputMaterials(PlanUtils.getInputMaterial(quantity, node.getData()))
                 ));
 
