@@ -22,13 +22,26 @@ public class ApsHardSoftScoreConstraintProvider implements ConstraintProvider {
     @Override
     public Constraint[] defineConstraints(ConstraintFactory constraintFactory) {
         return new Constraint[] {
-          arrangeByPriority(constraintFactory),
-          equipmentCanOnlyHandleMatchingProcesses(constraintFactory),
-                finishEarly(constraintFactory),
-                minimizeGapBetweenDependentTasks(constraintFactory),
-                noResourceTimeOverlapping(constraintFactory),
-                theEquipmentCanOnlyProcessOneProcessAtTheSameTime(constraintFactory),
+                arrangeByPriority(constraintFactory),                           // 尽量按优先级安排
+                equipmentCanOnlyHandleMatchingProcesses(constraintFactory),     // 主资源只能处理匹配的工序
+                finishEarly(constraintFactory),                                 // 尽早完成
+                minimizeGapBetweenDependentTasks(constraintFactory),            // 最小化依赖任务间的间隙
+                noResourceTimeOverlapping(constraintFactory),                   // 资源时间不重叠
+                theEquipmentCanOnlyProcessOneProcessAtTheSameTime(constraintFactory), // 设备同时只能处理一个工序
+                resourceMustBeCompatibleWithTask(constraintFactory),          // 资源必须与任务兼容
         };
+    }
+
+    /**
+     * 资源必须与任务兼容（避免在求解层面就尝试不兼容的分配）
+     */
+    public Constraint resourceMustBeCompatibleWithTask(ConstraintFactory factory) {
+        return factory.forEach(ProductionTask.class)
+                .filter(task -> task.getResource() != null)
+                .filter(task -> !task.getProcess().getUseMainResources().stream()
+                        .anyMatch(resource -> resource.getId().equals(task.getResource().getId())))
+                .penalize(HardSoftLongScore.ONE_HARD)
+                .asConstraint("资源必须与任务兼容");
     }
 
     public Constraint arrangeByPriority(ConstraintFactory factory) {
