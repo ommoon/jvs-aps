@@ -383,7 +383,7 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
             return startTime;
         }
 
-        task.setStartTime(startTime);
+        currentTask.setStartTime(startTime);
         log.debug("设置临时开始时间以检查重叠: taskCode={}, tempStartTime={}", currentTask.getCode(), startTime);
 
         Optional<LocalDateTime> maxOverlappingTime = resourcePinnedTasks.stream()
@@ -392,7 +392,7 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
                 .max(Comparator.naturalOrder());
         if (maxOverlappingTime.isPresent()) {
             log.debug("发现时间重叠，重新计算时间: taskCode={}, overlappingEndTime={}", currentTask.getCode(), maxOverlappingTime.get());
-            return calculateStartTime(currentTask, resourcePreviousTask, maxOverlappingTime.get(), tasks, currentResourcePreviousTasks);
+            return calculateStartTime(currentTask, resourcePreviousTask, maxOverlappingTime.get(), allTasks, currentResourcePreviousTasks);
         }
 
         log.debug("任务时间计算完成: taskCode={}, finalStartTime={}", currentTask.getCode(), startTime);
