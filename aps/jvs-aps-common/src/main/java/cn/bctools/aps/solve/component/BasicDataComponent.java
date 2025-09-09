@@ -203,6 +203,7 @@ public class BasicDataComponent {
         LambdaQueryWrapper<ProductionOrderPO> wrapper = Wrappers.<ProductionOrderPO>lambdaQuery()
                 .eq(ProductionOrderPO::getOrderStatus, OrderStatusEnum.PENDING)
                 .ne(ProductionOrderPO::getSchedulingStatus, OrderSchedulingStatusEnum.COMPLETED)
+                .ne(ProductionOrderPO::getSupplement, 1)
                 .eq(ProductionOrderPO::getCanSchedule, true);
         List<ProductionOrderPO> productionOrders = productionOrderService.list(wrapper);
         if (ObjectNull.isNull(productionOrders)) {

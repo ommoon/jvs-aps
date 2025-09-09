@@ -325,18 +325,25 @@ public class SolveServiceImpl implements SolveService {
      */
     private void addSupplementOrders(List<ProductionOrder> orders, List<ProductionTask> productionTaskList) {
         // 从补充制造任务中，提取自动创建的补充生产订单
-        List<ProductionOrder> supplementOrders = productionTaskList.stream()
+        List<ProductionOrder> supplementOrders = new ArrayList<>(productionTaskList.stream()
+                .filter(Objects::nonNull)
                 .filter(ProductionTask::getSupplement)
                 .map(ProductionTask::getOrder)
                 .distinct()
-                .toList();
+                .toList());
         if (ObjectNull.isNull(supplementOrders)) {
             return;
         }
+        log.info("补充订单数量：{}", supplementOrders.size());
+        for (ProductionOrder supplementOrder : supplementOrders) {
+            log.info("补充订单：{}", supplementOrder);
+        }
         // 若补充订单的订单号已存在，则移除旧的订单，加入新的订单
         Set<String> supplementOrderCodes = supplementOrders.stream()
+                .filter(Objects::nonNull)
                 .map(ProductionOrder::getCode)
                 .collect(Collectors.toSet());
+        supplementOrders.removeIf(ObjectNull::isNull);
         orders.removeIf(order -> supplementOrderCodes.contains(order.getCode()));
         orders.addAll(supplementOrders);
     }
@@ -363,11 +370,11 @@ public class SolveServiceImpl implements SolveService {
                             .findFirst();
                     mainResource.ifPresent(productionTask::setResource);
                     if (ObjectNull.isNotNull(pinnedTask.getProductionOrderId())) {
-                        ProductionOrder productionOrder = productionOrders.stream()
+                        Optional<ProductionOrder> productionOrder = productionOrders.stream()
                                 .filter(order -> order.getId().equals(pinnedTask.getProductionOrderId()))
                                 .findFirst()
-                                .get();
-                        productionTask.setOrder(productionOrder);
+                                .filter(ObjectNull::isNotNull);
+                        productionOrder.ifPresent(productionTask::setOrder);
                     }
                     return productionTask;
                 })
