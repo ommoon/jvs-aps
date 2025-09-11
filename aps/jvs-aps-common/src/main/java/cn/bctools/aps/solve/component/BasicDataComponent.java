@@ -190,7 +190,7 @@ public class BasicDataComponent {
                     incomingMaterialOrder.setMaterialId(materialCodeMap.get(order.getMaterialCode()));
                     return incomingMaterialOrder;
                 })
-                .collect(Collectors.groupingBy(IncomingMaterialOrder::getMaterialId));
+                .collect(Collectors.groupingBy(IncomingMaterialOrder::getMaterialCode));
     }
 
     /**

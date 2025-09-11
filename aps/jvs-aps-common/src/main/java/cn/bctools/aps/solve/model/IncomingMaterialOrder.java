@@ -12,6 +12,10 @@ import java.time.LocalDateTime;
  */
 @Data
 public class IncomingMaterialOrder {
+
+    @Comment("订单id")
+    private String id;
+
     @Comment("物料id")
     private String materialId;
 

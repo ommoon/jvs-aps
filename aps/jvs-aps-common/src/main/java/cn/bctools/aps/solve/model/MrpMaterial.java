@@ -22,14 +22,26 @@ public class MrpMaterial {
      */
     private BigDecimal quantity;
 
-    /**
-     * 原物料库存
-     */
-    private BigDecimal oriQuantity;
+    private String materialCode;
+
+    private String materialName;
 
     /**
-     * 来料订单库存
+     * 原物料剩余库存
      */
-    private Map<String, BigDecimal> inMaterialQuantity;
+    private BigDecimal stockQuantity;
+    /**
+     * 原物料扣减库存
+     */
+    private BigDecimal deductQuantity;
+
+    /**
+     * 额外订单扣减库存
+     */
+    private Map<String, BigDecimal> extraDeductQuantity;
+    /**
+     * 额外订单剩余库存
+     */
+    private Map<String, BigDecimal> extraStockQuantity;
 
 }

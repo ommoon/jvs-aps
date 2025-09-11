@@ -1,6 +1,7 @@
 package cn.bctools.aps.solve.util;
 
 import cn.bctools.aps.entity.dto.ProcessRouteNodePropertiesDTO;
+import cn.bctools.aps.entity.dto.plan.PlanTaskInputMaterialDTO;
 import cn.bctools.aps.entity.enums.MaterialSourceEnum;
 import cn.bctools.aps.entity.enums.OrderSchedulingStatusEnum;
 import cn.bctools.aps.graph.Graph;
@@ -101,10 +102,27 @@ public class ProductionTaskUtils {
                     return null;
                 }
                 mrpMaterialTask.setTaskList(taskList);
-
+                Set<String> fromIds = mrpMaterialGraph.getNodeFromIds(materialNodeId);
+                Map<String, MrpMaterial> mrpMaterialMap = new HashMap<>();
+                for (String item : fromIds) {
+                    MrpMaterial childMrp = mrpMaterialGraph.getNode(item).getData();
+                    mrpMaterialMap.put(childMrp.getId(), childMrp);
+                }
+                for (ProductionTask productionTask : taskList) {
+                    productionTask.getInputMaterials().forEach(input -> {
+                        if (mrpMaterialMap.containsKey(input.getId())) {
+                            MrpMaterial childMrp = mrpMaterialMap.get(input.getId());
+                            input.setMaterialCode(childMrp.getMaterialCode());
+                            input.setMaterialName(childMrp.getMaterialName());
+                            input.setDeductQuantity(childMrp.getDeductQuantity());
+                            input.setStockQuantity(childMrp.getStockQuantity());
+                            input.setExtraDeductQuantity(childMrp.getExtraDeductQuantity());
+                            input.setExtraStockQuantity(childMrp.getExtraStockQuantity());
+                        }
+                    });
+                }
                 // 3.2.3 建立物料间的任务依赖关系
                 // 获取前置物料任务的最后一道任务，作为当前任务的前置任务
-                Set<String> fromIds = mrpMaterialGraph.getNodeFromIds(materialNodeId);
                 if (ObjectNull.isNotNull(fromIds)) {
                     List<ProductionTask> notHaveFrontTaskList = mrpMaterialTask.getNotHaveFrontTasks();
                     notHaveFrontTaskList.forEach(task -> {

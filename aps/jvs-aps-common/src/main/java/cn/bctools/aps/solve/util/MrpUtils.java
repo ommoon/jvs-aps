@@ -37,9 +37,10 @@ public class MrpUtils {
     public static Graph<MrpMaterial> calculateMaterialAvailability(boolean materialConstrained, ProductionOrder order, BasicData basicData) {
         // 1. 初始化空的MRP图结构
         Graph<MrpMaterial> mrpGraph = new Graph<>();
+        Map<String, Material> materialMap = basicData.getMaterialMap();           // 物料信息映射
 
         // 2. 构造订单物料栈数据（顶层物料）
-        MaterialStack orderMaterial = buildMaterialStack(order.getMaterialId(), order.getQuantity(), null);
+        MaterialStack orderMaterial = buildMaterialStack(order.getMaterialId(), order.getQuantity(), null, materialMap);
 
         // 3. 如果不约束物料，直接将订单需求加入MRP图并返回
         if (!materialConstrained) {
@@ -48,7 +49,6 @@ public class MrpUtils {
         }
 
         // 4. 获取基础数据
-        Map<String, Material> materialMap = basicData.getMaterialMap();           // 物料信息映射
         Map<String, List<BomMaterial>> bomMap = basicData.getBomMap();            // BOM结构映射
         Map<String, List<IncomingMaterialOrder>> incomingMaterialOrderMap = basicData.getIncomingMaterialOrderMap(); // 在途库存映射
 
@@ -66,7 +66,7 @@ public class MrpUtils {
             // 6.2 扣减库存，计算缺料数量
             // 这里会先扣减现有库存，再扣减在途库存（根据交货时间）
             // TODO omm 2025/9/8 库存删减，单位运算，回写和信息保存
-            BigDecimal lackQuantity = InventoryUtils.deductInventory(order, material, mrpMaterial.getQuantity(), incomingMaterialOrderMap);
+            BigDecimal lackQuantity = InventoryUtils.deductInventory(order, material, mrpMaterial, incomingMaterialOrderMap);
             mrpMaterial.setQuantity(lackQuantity);
 
             // 6.3 如果存在缺料（缺料数量大于0）
@@ -82,7 +82,7 @@ public class MrpUtils {
                 bomMaterialList.forEach(bomMaterial -> {
                     // 计算子件需求数量 = 子件单耗 * 父件缺料数量
                     BigDecimal quantity = bomMaterial.getQuantity().multiply(lackQuantity).setScale(6, RoundingMode.HALF_UP);
-                    MaterialStack childMaterial = buildMaterialStack(bomMaterial.getMaterialId(), quantity, stack.getId());
+                    MaterialStack childMaterial = buildMaterialStack(bomMaterial.getMaterialId(), quantity, stack.getId(), materialMap);
                     materialStack.push(childMaterial);
                 });
             }
@@ -122,9 +122,12 @@ public class MrpUtils {
      * @param parentId 上层物料
      * @return 物料信息
      */
-    private static MaterialStack buildMaterialStack(String materialId, BigDecimal quantity, String parentId) {
+    private static MaterialStack buildMaterialStack(String materialId, BigDecimal quantity, String parentId, Map<String, Material> materialMap) {
+        Material material = materialMap.get(materialId);
         MrpMaterial mrpMaterial = new MrpMaterial()
                 .setId(materialId)
+                .setMaterialCode(material.getCode())
+                .setMaterialName(material.getName())
                 .setQuantity(quantity);
         return new MaterialStack()
                 .setId(IdWorker.getIdStr())
