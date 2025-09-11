@@ -26,6 +26,9 @@ import cn.bctools.common.utils.ObjectNull;
 import cn.bctools.common.utils.TenantContextHolder;
 import cn.bctools.common.utils.function.Get;
 import cn.bctools.redis.utils.RedisUtils;
+import cn.hutool.json.JSON;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.optaplanner.core.api.solver.SolverJob;
@@ -35,6 +38,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
@@ -290,6 +294,9 @@ public class SolveServiceImpl implements SolveService {
         // 遍历生产订单，分配库存或生成生产任务
         int step = 0;
         for (ProductionOrder order : orders) {
+            log.info("开始处理订单: code={}, deliveryTime={}, priority={}, step={}",
+                    order.getCode(), order.getDeliveryTime(), order.getPriority(), step);
+
             long timeMillis = System.currentTimeMillis();
             OrderSchedulingStatusEnum schedulingStatus = OrderSchedulingStatusEnum.NO_SCHEDULED;
             // 执行MRP计算
@@ -300,7 +307,11 @@ public class SolveServiceImpl implements SolveService {
                 List<ProductionTask> tasks = ProductionTaskUtils.generateTask(order, basicData, mrp, pinnedProductionTaskList);
                 tasks.removeIf(orderTask -> productionTaskList.stream().anyMatch(task -> task.getCode().equals(orderTask.getCode())));
                 for (ProductionTask task : tasks) {
+                    int deliveryPriority = calculateDeliveryPriority(order.getDeliveryTime());
+                    int orderPriority = step * 1000 + deliveryPriority;
                     task.setPriority(step);
+                    log.debug("设置任务task={}的优先级: orderStep={} orderPriority={} deliveryPriority={} finalPriority={}",
+                            task.getCode(), step, orderPriority, deliveryPriority, task.getPriority());
                 }
                 productionTaskList.addAll(tasks);
             }
@@ -313,8 +324,21 @@ public class SolveServiceImpl implements SolveService {
         }
         // 待排产的生产任务
         solution.setTasks(productionTaskList);
+        List<String> list = solution.getTasks().stream().map(ProductionTask::getCode).toList();
+        log.info("SchedulingSolution tasks：{}", JSONUtil.toJsonStr(list));
         // 提取自动创建的补充生产订单，加入生产订单集合
         addSupplementOrders(orders, productionTaskList);
+    }
+
+    // 辅助方法：根据交付时间计算优先级（交付时间越早，优先级数值越小）
+    private int calculateDeliveryPriority(LocalDateTime deliveryTime) {
+        if (deliveryTime == null) {
+            return Integer.MAX_VALUE / 2; // 给一个中等优先级
+        }
+        // 计算距离现在的小时数，确保结果为正数
+        long hoursToDelivery = ChronoUnit.HOURS.between(LocalDateTime.now(), deliveryTime);
+        // 确保结果为正数且在合理范围内
+        return Math.max(0, (int) hoursToDelivery);
     }
 
     /**
@@ -391,6 +415,7 @@ public class SolveServiceImpl implements SolveService {
         if (ObjectNull.isNull(orderList)) {
             throw new BusinessException("没有需要排产的订单");
         }
+        log.info("排序前订单顺序: {}", orderList.stream().map(o -> o.getCode() + "(" + o.getDeliveryTime() + ")").collect(Collectors.toList()));
         // 如果未设置规则，设置默认规则
         if (ObjectNull.isNull(rules)) {
             rules = defaultOrderSortRule();
@@ -405,7 +430,10 @@ public class SolveServiceImpl implements SolveService {
             }
             comparator = comparator == null ? filedComparator : comparator.thenComparing(filedComparator);
         }
+        // 记录排序后的订单顺序
+        log.info("排序后订单顺序: {}", orderList.stream().map(o -> o.getCode() + "(" + o.getDeliveryTime() + ")").collect(Collectors.toList()));
         orderList.sort(comparator);
+
     }
 
     /**

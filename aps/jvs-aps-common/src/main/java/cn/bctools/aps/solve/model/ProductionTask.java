@@ -180,10 +180,12 @@ public class ProductionTask {
      */
     public LocalDateTime getEndTime() {
         if (ObjectNull.isNull(startTime) || ObjectNull.isNull(resource)) {
+            log.warn("任务开始时间或资源为空，无法计算任务结束时间: taskCode={}", code);
             return null;
         }
         Duration taskDuration = calculateTaskDuration();
         if (taskDuration == null) {
+            log.warn("任务持续时间计算失败: taskCode={}, this={}", code, this);
             return null;
         }
         return TaskCalendarUtils.calculateEndTime(startTime, taskDuration, resource.getWorkCalendars());
@@ -202,6 +204,11 @@ public class ProductionTask {
     public String toString() {
         return "ProductionTask{" +
                 "code='" + code + '\'' +
+                ", mainOrderId='" + mainOrderId + '\'' +
+                ", order=" + order +
+                ", material=" + material +
+                ", process=" + process +
+                ", resource=" + resource +
                 '}';
     }
 }

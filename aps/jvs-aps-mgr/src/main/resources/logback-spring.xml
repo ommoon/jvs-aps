@@ -326,6 +326,7 @@
     <logger name="org.springframework.beans.factory.support.DefaultListableBeanFactory" level="WARN"/> <!-- 只保留警告及以上级别 -->
     <logger name="org.redisson" level="WARN"/> <!-- 只保留警告及以上级别 -->
     <logger name="org.quartz" level="WARN"/>  <!-- 只保留警告及以上级别 -->
+    <logger name="io.lettuce.core.protocol" level="ERROR"/>  <!-- 只保留ERROR级别 -->
     <logger name="com.xxl.job.core.thread.ExecutorRegistryThread" level="ERROR"/>  <!-- 只保留ERROR级别 -->
 
     <root level="${LOG_LEVEL}">

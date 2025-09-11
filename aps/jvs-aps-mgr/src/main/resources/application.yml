@@ -32,7 +32,7 @@ logging:
 log:
   level:
     # 等级 TRACE,DEBUG,INFO,WARN,ERROR(不区分大小写)
-    root: DEBUG
+    root: INFO
   path: log/${spring.application.name}
 
 

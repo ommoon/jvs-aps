@@ -225,19 +225,23 @@ public class ProductionTaskUtils {
         // Map<工序节点id, 工序生产任务>
         Map<String, ProductionTask> processTaskMap = processRouteGraph.getNodes().stream()
                 .collect(Collectors.toMap(GraphNode::getId, node ->
-                        new ProductionTask()
-                                .setId(IdWorker.getIdStr())
-                                .setCode(generateTaskCode(taskOrder, node.getData()))
-                                .setMergeTask(false)
-                                .setMainOrderId(mainOrder.getId())
-                                .setOrder(taskOrder)
-                                .setMaterial(material)
-                                .setProcess(node.getData())
-                                .setQuantity(quantity)
-                                .setPinned(false)
-                                .setEndTask(node.getId().equals(endProcessNodeId))
-                                .setSupplement(ObjectNull.isNotNull(childOrder))
-                                .setInputMaterials(PlanUtils.getInputMaterial(quantity, node.getData()))
+                        {
+                            ProductionTask productionTask = new ProductionTask()
+                                    .setId(IdWorker.getIdStr())
+                                    .setCode(generateTaskCode(taskOrder, node.getData()))
+                                    .setMergeTask(false)
+                                    .setMainOrderId(mainOrder.getId())
+                                    .setOrder(taskOrder)
+                                    .setMaterial(material)
+                                    .setProcess(node.getData())
+                                    .setQuantity(quantity)
+                                    .setPinned(false)
+                                    .setEndTask(node.getId().equals(endProcessNodeId))
+                                    .setSupplement(ObjectNull.isNotNull(childOrder))
+                                    .setInputMaterials(PlanUtils.getInputMaterial(quantity, node.getData()));
+                            log.info("创建生产任务：{}", productionTask);
+                            return productionTask;
+                        }
                 ));
 
 

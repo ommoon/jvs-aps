@@ -4,6 +4,7 @@ import lombok.Data;
 import lombok.experimental.Accessors;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 /**
  * @author jvs
@@ -29,10 +30,6 @@ public class MrpMaterial {
     /**
      * 来料订单库存
      */
-    private BigDecimal inQuantity;
+    private Map<String, BigDecimal> inMaterialQuantity;
 
-    /**
-     * 来料订单库存订单id
-     */
-    private String inOrderId;
 }

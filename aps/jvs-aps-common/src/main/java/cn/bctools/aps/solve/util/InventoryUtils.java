@@ -37,9 +37,9 @@ public class InventoryUtils {
             throw new BusinessException("物料不存在", order.getMaterialCode());
         }
         // 优先扣减在库库存
-        BigDecimal lackQuantity = deductInStockInventory(material, quantity);
+        CalculationInventoryResult stockInventory = deductInStockInventory(material, quantity);
         // 在库库存不够，扣减在途库存（来料订单）
-        return deductInTransitInventory(lackQuantity, order, material, incomingMaterialOrderMap);
+        return deductInTransitInventory(stockInventory, order, material, incomingMaterialOrderMap);
     }
 
     /**
@@ -49,28 +49,29 @@ public class InventoryUtils {
      * @param requiredQuantity 需要的库存数量
      * @return 缺料数量
      */
-    private static BigDecimal deductInStockInventory(Material material, BigDecimal requiredQuantity) {
+    private static CalculationInventoryResult deductInStockInventory(Material material, BigDecimal requiredQuantity) {
         // 扣减库存
         CalculationInventoryResult result = calculationInventory(material.getQuantity(), requiredQuantity);
+        // 更新库存
         material.setQuantity(result.getDeductQuantity());
         // 返回缺料数量
-        return result.getLackQuantity();
+        return result;
     }
 
 
     /**
      * 扣减在途库存
      *
-     * @param requiredQuantity         需要的库存数量
+     * @param stockInventory         需要的库存数量
      * @param order                    订单
      * @param material                 物料
      * @param incomingMaterialOrderMap 在途库存
      * @return 缺料数量
      */
-    private static BigDecimal deductInTransitInventory(BigDecimal requiredQuantity, ProductionOrder order, Material material,
+    private static BigDecimal deductInTransitInventory(CalculationInventoryResult stockInventory, ProductionOrder order, Material material,
                                                        Map<String, List<IncomingMaterialOrder>> incomingMaterialOrderMap) {
         // 缺料数量
-        BigDecimal lackQuantity = requiredQuantity;
+        BigDecimal lackQuantity = stockInventory.getLackQuantity();
         if (lackQuantity.compareTo(BigDecimal.ZERO) <= 0) {
             return lackQuantity;
         }

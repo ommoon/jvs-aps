@@ -44,6 +44,7 @@ public class TaskDurationUtils {
      * @return 任务持续时长（不包含休息时间）
      */
     public static Duration calculateTaskDuration(String mainResourceId, ProcessRouteNodePropertiesDTO process, BigDecimal quantity) {
+        // TODO omm 2025/9/10 如果主资源只有一个 多个不行
         Optional<ProcessUseMainResourcesDTO> processUseMainResources = process.getUseMainResources()
                 .stream()
                 .filter(res -> res.getId().equals(mainResourceId))
@@ -51,8 +52,12 @@ public class TaskDurationUtils {
         if (processUseMainResources.isPresent()) {
             String throughput = processUseMainResources.get().getThroughput();
             return calculateTaskDuration(throughput, quantity);
+        } else if (process.getUseMainResources().size() == 1){
+            String throughput = process.getUseMainResources().get(0).getThroughput();
+            return calculateTaskDuration(throughput, quantity);
         }
-        return null;
+
+        return Duration.ZERO;
     }
 
 

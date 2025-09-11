@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -113,6 +114,85 @@ import java.util.stream.IntStream;
 @Service
 public class TaskTimeForwardServiceImpl implements TaskTimeService {
 
+    // 缓存用于存储任务时间计算结果
+    private final Map<String, TaskTimeCache> timeCalculationCache = new ConcurrentHashMap<>();
+
+    // 用于跟踪传播深度，防止无限递归
+    private final ThreadLocal<Integer> propagationDepth = new ThreadLocal<Integer>() {
+        @Override
+        protected Integer initialValue() {
+            return 0;
+        }
+    };
+
+    /**
+     * 检查资源是否与任务兼容
+     *
+     * @param resource 资源
+     * @param task 任务
+     * @return 是否兼容
+     */
+    private boolean isResourceCompatibleWithTask(MainProductionResource resource, ProductionTask task) {
+        // 检查任务和工序信息是否完整
+        if (task.getProcess() == null || task.getProcess().getUseMainResources() == null) {
+            log.warn("任务工序信息不完整: taskCode={}", task.getCode());
+            return false;
+        }
+
+        // 检查资源ID是否为空
+        if (resource.getId() == null) {
+            log.warn("资源ID为空: resourceCode={}", resource.getCode());
+            return false;
+        }
+
+        // 检查是否在允许的资源列表中
+        return task.getProcess().getUseMainResources().stream()
+                .filter(ObjectNull::isNotNull)
+                .anyMatch(reqResource ->
+                        ObjectNull.isNotNull(reqResource.getId()) &&
+                                reqResource.getId().equals(resource.getId()));
+    }
+
+    /**
+     * 验证任务分配的有效性
+     *
+     * @param task 任务
+     * @param resource 资源
+     * @return 验证结果
+     */
+    private ValidationResult validateTaskAssignment(ProductionTask task, MainProductionResource resource) {
+        ValidationResult result = new ValidationResult();
+
+        // 资源兼容性检查
+        if (!isResourceCompatibleWithTask(resource, task)) {
+            result.addViolation("资源不兼容", ValidationResult.Severity.ERROR);
+        }
+
+        // 时间重叠检查
+        if (hasTimeOverlap(task, resource)) {
+            result.addViolation("时间重叠", ValidationResult.Severity.WARNING);
+        }
+
+        return result;
+    }
+
+    /**
+     * 检查任务是否与资源中的其他任务时间重叠
+     */
+    private boolean hasTimeOverlap(ProductionTask task, MainProductionResource resource) {
+        if (task.getStartTime() == null || task.getEndTime() == null) {
+            return false;
+        }
+
+        return resource.getTaskList().stream()
+                .filter(t -> !t.getId().equals(task.getId()))
+                .filter(t -> t.getStartTime() != null && t.getEndTime() != null)
+                .anyMatch(t -> {
+                    return t.getStartTime().isBefore(task.getEndTime()) &&
+                            t.getEndTime().isAfter(task.getStartTime());
+                });
+    }
+
     /**
      * @param scoreDirector
      * @param resource 主资源
@@ -120,7 +200,11 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
      */
     @Override
     public void updateTaskStartTime(ScoreDirector<SchedulingSolution> scoreDirector, MainProductionResource resource, int fromIndex) {
-        log.info("开始更新资源任务时间: resource={}, resourceName={}, fromIndex={} taskListSize={}", resource.getCode(), resource.getName(), fromIndex, resource.getTaskList().size());
+        log.info("开始更新资源任务时间: resource={}, resourceName={}, fromIndex={} taskListSize={}",
+                resource.getCode(), resource.getName(), fromIndex, resource.getTaskList().size());
+
+        // 清除该资源的缓存
+        clearResourceCache(resource);
 
         // 获取计划开始时间作为基准时间
         LocalDateTime beginTime = scoreDirector.getWorkingSolution().getPlanTime();
@@ -141,7 +225,7 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
         while (!uncheckedSuccessorQueue.isEmpty()) {
             // 取出队列中的一个待处理任务
             PendingChangeTaskDTO update = uncheckedSuccessorQueue.remove();
-            log.debug("处理资源任务变更: resource={}, resourceName={},  taskListSize={}",
+            log.debug("处理资源任务变更: resource={}, resourceName={}, taskListSize={}",
                     update.getResource().getCode(), update.getResource().getName(), update.getResource().getTaskList().size());
 
             // 获取在该资源的任务列表
@@ -155,15 +239,19 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
                 continue;
             }
 
+            // 预先检查资源兼容性并处理不兼容任务
+            handleIncompatibleTasks(scoreDirector, update.getResource(), tasks, fromIdx);
+
             // 获取当前变更任务[即被分派到当前资源的任务]在资源中的前一个任务
             ProductionTask sourcePreviousTask = getSourcePreviousTask(tasks, fromIdx);
+
             // 计算前一个任务的结束时间，如果是第一个任务则使用计划开始时间
             LocalDateTime sourceTaskPreviousEndTime = fromIdx == 0 ? beginTime :
                     Optional.ofNullable(sourcePreviousTask).map(ProductionTask::getEndTime).orElseGet(() -> beginTime);
             // 设置资源前一个任务的结束时间为基准时间
             LocalDateTime resourcePreviousEndTime = sourceTaskPreviousEndTime;
 
-            log.debug("资源时间基准计算: resource={},resourceName={},  fromIdx={}, sourcePreviousTask={}, sourceTaskPreviousEndTime={}",
+            log.debug("资源时间基准计算: resource={}, resourceName={}, fromIdx={}, sourcePreviousTask={}, sourceTaskPreviousEndTime={}",
                     update.getResource().getCode(),
                     update.getResource().getName(),
                     fromIdx,
@@ -172,14 +260,17 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
 
             // 记录不需要更新的前置任务ID
             Set<String> notUpdateFrontTaskIds = new HashSet<>();
+            // 记录已处理的任务，用于传播控制
+            Set<String> processedTaskIds = new HashSet<>();
 
             // 遍历从起始索引开始的所有任务
             for (int idx = fromIdx; idx < tasks.size(); idx++) {
                 ProductionTask currentTask = tasks.get(idx);
-                log.debug("处理任务: taskCode={}, taskId={}, resource={}, resourceName={},  index={}",
+                log.debug("处理任务: taskCode={}, taskId={}, resource={}, resourceName={}, index={}",
                         currentTask.getCode(), currentTask.getId(),
                         update.getResource().getCode(), update.getResource().getName(),
                         idx);
+
                 // 将当前任务ID加入历史记录
                 historyQueueJobIds.add(currentTask.getId());
 
@@ -198,7 +289,7 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
                 }
 
                 // 计算当前任务的开始时间
-                LocalDateTime startTime = calculateStartTime(
+                LocalDateTime startTime = calculateStartTimeWithCache(
                         update.getResource(),           // 资源
                         currentTask,                    // 当前任务
                         sourcePreviousTask,            // 资源前一个任务
@@ -235,38 +326,15 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
                                 update.getResource().getCode(), resourcePreviousEndTime);
                     }
 
+                    // 缓存计算结果
+                    cacheTaskTime(currentTask, startTime);
+
+                    // 记录已处理任务
+                    processedTaskIds.add(currentTask.getId());
+
                     // 查找当前任务的后续任务并加入处理队列
-                    scoreDirector.getWorkingSolution().getTasks()
-                            .stream()
-                            .filter(j -> ObjectNull.isNull(j.getMergeTaskCode())) // 过滤非合并任务
-                            .filter(j -> j.getFrontTaskCodes() != null && j.getFrontTaskCodes().contains(currentTask.getCode())) // 过滤后续任务
-                            .filter(j -> j.getResource() != null) // 过滤已分配资源的任务
-                            .forEach(nextJob -> {
-                                log.debug("发现后续任务: currentTask={}, nextTask={}", currentTask.getCode(), nextJob.getCode());
-
-                                // 如果后续任务未被处理过
-                                if (!historyQueueJobIds.contains(nextJob.getId())) {
-                                    // 获取后续任务所在资源的任务列表
-                                    List<ProductionTask> nextResourceTasks = nextJob.getResource().getTaskList();
-                                    // 查找后续任务在资源中的索引
-                                    int optionalIndex = IntStream.range(0, nextResourceTasks.size())
-                                            .filter(i -> nextResourceTasks.get(i).getId().equals(nextJob.getId()))
-                                            .findFirst().getAsInt();
-                                    // 创建后续任务的待处理对象
-                                    PendingChangeTaskDTO updateNextJob = new PendingChangeTaskDTO()
-                                            .setResource(nextJob.getResource())
-                                            .setFromIndex(optionalIndex);
-                                    // 将当前任务ID加入历史记录
-                                    historyQueueJobIds.add(currentTask.getId());
-                                    // 将后续任务加入待处理队列
-                                    uncheckedSuccessorQueue.add(updateNextJob);
-
-                                    log.debug("添加后续任务到处理队列: nextTask={}, resource={}, index={}",
-                                            nextJob.getCode(), nextJob.getResource().getCode(), optionalIndex);
-                                } else {
-                                    log.debug("后续任务已处理过，跳过: nextTask={}", nextJob.getCode());
-                                }
-                            });
+                    findAndProcessSuccessorTasks(scoreDirector, currentTask, historyQueueJobIds,
+                            uncheckedSuccessorQueue, processedTaskIds);
                 }
             }
         }
@@ -274,6 +342,77 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
         log.info("资源任务时间更新完成: resource={}", resource.getCode());
     }
 
+    /**
+     * 处理不兼容任务
+     */
+    private void handleIncompatibleTasks(ScoreDirector<SchedulingSolution> scoreDirector,
+                                         MainProductionResource resource,
+                                         List<ProductionTask> tasks,
+                                         int fromIndex) {
+        List<ProductionTask> incompatibleTasks = tasks.stream()
+                .skip(fromIndex)
+                .filter(task -> !isResourceCompatibleWithTask(resource, task))
+                .collect(Collectors.toList());
+
+        // 如果不兼容任务过多，记录警告
+        if (incompatibleTasks.size() > tasks.size() * 0.3) {
+            log.warn("资源与过多任务不兼容，可能需要重新规划: resource={}, incompatibleCount={}",
+                    resource.getCode(), incompatibleTasks.size());
+        }
+
+        // 处理不兼容任务
+        incompatibleTasks.forEach(task -> {
+            log.warn("检测到资源与任务不兼容，将任务时间置空: taskCode={}, resource={}",
+                    task.getCode(), resource.getCode());
+            // 通知OptaPlanner开始时间将要改变
+            scoreDirector.beforeVariableChanged(task, "startTime");
+            // 设置任务开始时间为null
+            task.setStartTime(null);
+            // 通知OptaPlanner开始时间已改变
+            scoreDirector.afterVariableChanged(task, "startTime");
+        });
+    }
+
+    /**
+     * 查找并处理后续任务
+     */
+    private void findAndProcessSuccessorTasks(ScoreDirector<SchedulingSolution> scoreDirector,
+                                              ProductionTask currentTask,
+                                              Set<String> historyQueueJobIds,
+                                              Queue<PendingChangeTaskDTO> uncheckedSuccessorQueue,
+                                              Set<String> processedTaskIds) {
+        scoreDirector.getWorkingSolution().getTasks()
+                .stream()
+                .filter(j -> ObjectNull.isNull(j.getMergeTaskCode())) // 过滤非合并任务
+                .filter(j -> j.getFrontTaskCodes() != null && j.getFrontTaskCodes().contains(currentTask.getCode())) // 过滤后续任务
+                .filter(j -> j.getResource() != null) // 过滤已分配资源的任务
+                .forEach(nextJob -> {
+                    log.debug("发现后续任务: currentTask={}, nextTask={}", currentTask.getCode(), nextJob.getCode());
+
+                    // 如果后续任务未被处理过
+                    if (!historyQueueJobIds.contains(nextJob.getId()) && !processedTaskIds.contains(nextJob.getId())) {
+                        // 获取后续任务所在资源的任务列表
+                        List<ProductionTask> nextResourceTasks = nextJob.getResource().getTaskList();
+                        // 查找后续任务在资源中的索引
+                        int optionalIndex = IntStream.range(0, nextResourceTasks.size())
+                                .filter(i -> nextResourceTasks.get(i).getId().equals(nextJob.getId()))
+                                .findFirst().orElse(0);
+                        // 创建后续任务的待处理对象
+                        PendingChangeTaskDTO updateNextJob = new PendingChangeTaskDTO()
+                                .setResource(nextJob.getResource())
+                                .setFromIndex(optionalIndex);
+                        // 将当前任务ID加入历史记录
+                        historyQueueJobIds.add(currentTask.getId());
+                        // 将后续任务加入待处理队列
+                        uncheckedSuccessorQueue.add(updateNextJob);
+
+                        log.debug("添加后续任务到处理队列: nextTask={}, resource={}, index={}",
+                                nextJob.getCode(), nextJob.getResource().getCode(), optionalIndex);
+                    } else {
+                        log.debug("后续任务已处理过，跳过: nextTask={}", nextJob.getCode());
+                    }
+                });
+    }
 
     /**
      * 找到指定下标前面第一个有结束时间的任务
@@ -324,12 +463,78 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
     }
 
     /**
+     * 计算任务开始时间（带缓存）
+     */
+    private LocalDateTime calculateStartTimeWithCache(MainProductionResource mainProductionResource,
+                                                      ProductionTask currentTask,
+                                                      ProductionTask resourcePreviousTask,
+                                                      LocalDateTime resourcePreviousEndTime,
+                                                      List<ProductionTask> allTasks,
+                                                      List<ProductionTask> currentResourcePreviousTasks) {
+        // 生成缓存键
+        String cacheKey = generateCacheKey(mainProductionResource, currentTask, resourcePreviousEndTime);
+
+        // 检查缓存
+        TaskTimeCache cachedResult = timeCalculationCache.get(cacheKey);
+        if (cachedResult != null && !isCacheExpired(cachedResult)) {
+            log.debug("使用缓存结果: taskCode={}", currentTask.getCode());
+            return cachedResult.getStartTime();
+        }
+
+        // 计算任务开始时间
+        LocalDateTime startTime = calculateStartTime(
+                mainProductionResource,
+                currentTask,
+                resourcePreviousTask,
+                resourcePreviousEndTime,
+                allTasks,
+                currentResourcePreviousTasks);
+
+        // 缓存结果
+        if (startTime != null) {
+            timeCalculationCache.put(cacheKey, new TaskTimeCache(startTime, System.currentTimeMillis()));
+        }
+
+        return startTime;
+    }
+
+    /**
+     * 生成缓存键
+     */
+    private String generateCacheKey(MainProductionResource resource, ProductionTask task, LocalDateTime baseTime) {
+        return resource.getId() + "_" + task.getId() + "_" +
+                (baseTime != null ? baseTime.toString() : "null");
+    }
+
+    /**
+     * 检查缓存是否过期（5分钟）
+     */
+    private boolean isCacheExpired(TaskTimeCache cache) {
+        return System.currentTimeMillis() - cache.getTimestamp() > 5 * 60 * 1000;
+    }
+
+    /**
+     * 清除资源相关缓存
+     */
+    private void clearResourceCache(MainProductionResource resource) {
+        timeCalculationCache.entrySet().removeIf(entry ->
+                entry.getKey().startsWith(resource.getId() + "_"));
+    }
+
+    /**
+     * 缓存任务时间
+     */
+    private void cacheTaskTime(ProductionTask task, LocalDateTime startTime) {
+        // 这里可以实现更复杂的缓存策略
+    }
+
+    /**
      * 计算任务开始时间
      *
-     * @param task                    任务
+     * @param currentTask             任务
      * @param resourcePreviousTask    当前任务所在资源的前一个任务
      * @param resourcePreviousEndTime 当前任务所在资源的前一个任务的结束时间
-     * @param tasks                   所有排程任务
+     * @param allTasks                所有排程任务
      * @return 任务开始时间
      */
     private LocalDateTime calculateStartTime(MainProductionResource mainProductionResource,
@@ -338,12 +543,19 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
                                              LocalDateTime resourcePreviousEndTime,
                                              List<ProductionTask> allTasks,
                                              List<ProductionTask> currentResourcePreviousTasks) {
+        // 检查资源是否能处理该任务
+        if (!isResourceCompatibleWithTask(mainProductionResource, currentTask)) {
+            log.warn("资源无法处理任务: taskCode={}, resourceId={}, resource={}, resourceName={}",
+                    currentTask.getCode(),
+                    mainProductionResource.getId(), mainProductionResource.getCode(), mainProductionResource.getName());
+            return null;
+        }
         log.debug("开始计算任务时间: taskCode={}, resource={}, resourceName={}",
                 currentTask.getCode(),
                 mainProductionResource.getCode(),
                 mainProductionResource.getName());
 
-        // 检查资源是否能处理该任务 // TODO omm 2025/9/9 是否开源换成code码
+        // 检查资源是否能处理该任务
         List<String> requiredResourceIds = currentTask.getProcess().getUseMainResources()
                 .stream()
                 .map(ProcessUseMainResourcesDTO::getId)
@@ -521,7 +733,6 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
         return earliestStartTime;
     }
 
-
     /**
      * 获取执行当前任务之前的结束时间最晚的任务
      *
@@ -619,12 +830,12 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
         // 加上前置任务的后间隔时长
         Duration duration = DurationUtils.convertDuration(process.getPostIntervalDuration());
         if (ObjectNull.isNotNull(duration)) {
+            if (startTime != null)
             startTime = startTime.plus(duration);
             log.debug("添加后置间隔时间: preTask={}, duration={}, newStartTime={}", preTask.getCode(), duration, startTime);
         }
         return startTime;
     }
-
 
     /**
      * 计算任务最早开始时间
@@ -676,6 +887,57 @@ public class TaskTimeForwardServiceImpl implements TaskTimeService {
         return startTime;
     }
 
+    /**
+     * 任务时间缓存类
+     */
+    @Data
+    @Accessors(chain = true)
+    private static class TaskTimeCache {
+        private LocalDateTime startTime;
+        private long timestamp;
+
+        public TaskTimeCache(LocalDateTime startTime, long timestamp) {
+            this.startTime = startTime;
+            this.timestamp = timestamp;
+        }
+    }
+
+    /**
+     * 验证结果类
+     */
+    @Data
+    @Accessors(chain = true)
+    public static class ValidationResult {
+        private List<Violation> violations = new ArrayList<>();
+
+        public enum Severity {
+            INFO, WARNING, ERROR
+        }
+
+        @Data
+        @Accessors(chain = true)
+        public static class Violation {
+            private String message;
+            private Severity severity;
+
+            public Violation(String message, Severity severity) {
+                this.message = message;
+                this.severity = severity;
+            }
+        }
+
+        public void addViolation(String message, Severity severity) {
+            violations.add(new Violation(message, severity));
+        }
+
+        public boolean hasErrors() {
+            return violations.stream().anyMatch(v -> v.getSeverity() == Severity.ERROR);
+        }
+
+        public boolean hasWarnings() {
+            return violations.stream().anyMatch(v -> v.getSeverity() == Severity.WARNING);
+        }
+    }
 
     @Data
     @Accessors(chain = true)
